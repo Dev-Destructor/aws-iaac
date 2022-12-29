@@ -1,0 +1,35 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "AWS CloudFormation for Lambda"
+Resources: 
+  firstFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: nodejs16.x
+      Handler: index.handler
+      Code:
+        ZipFile: |
+          exports.handler = async (event) => {
+            console.log("Hello World");
+            return "Hello World";
+          };
+      Role: arn:aws:iam::872752637097:role/mng-test-lambda-ex
+      Description: "First Lambda Function"
+
+  lambdaURL:
+    Type: AWS::Lambda::Url
+    Properties: 
+      AuthType: NONE
+      Cors:
+        AllowMethods:
+          - '*'
+        AllowOrigins:
+          - '*'
+      TargetFunctionArn: !Ref firstFunction
+  
+  lambdaURLPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref firstFunction
+      Principal: '*'
+      Action: 'lambda:InvokeFunctionUrl'
+      FunctionUrlAuthType: NONE
