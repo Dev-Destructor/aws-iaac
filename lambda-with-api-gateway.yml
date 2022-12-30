@@ -1,0 +1,108 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Parameters:
+  apiGatewayName:
+    Type: String
+    Default: lambda-with-api-gateway
+  lambdaFunctionName:
+    Type: String
+    Default: lambda-with-api-gateway-function
+
+Resources:
+  ApiGatewayRestApi:
+    Type: "AWS::ApiGateway::RestApi"
+    Properties:
+      Name: !Ref apiGatewayName
+      Description: "AWS API Gateway with a Lambda Integration"
+
+  ApiGatewayDeployment:
+    Type: "AWS::ApiGateway::Deployment"
+    DependsOn: ApiGatewayMethod
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      Description: "Rest Api deployment"
+
+  ApiGatewayStage:
+    Type: "AWS::ApiGateway::Stage"
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      DeploymentId: !Ref ApiGatewayDeployment
+      StageName: "dev"
+      Description: "development stage"
+
+  ApiGatewayModel:
+    Type: "AWS::ApiGateway::Model"
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      Name: HelloWorldSchema
+      Description: "Schema for Hello World"
+      ContentType: "application/json"
+      Schema:
+        "$schema": "http://json-schema.org/draft-04/schema#"
+        title: PetsModelNoFlatten
+        type: object
+        properties:
+          status:
+            type: string
+          message:
+            type: string
+
+  ApiGatewayResource:
+    Type: "AWS::ApiGateway::Resource"
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      ParentId: !GetAtt ApiGatewayRestApi.RootResourceId
+      PathPart: "hello"
+
+  ApiGatewayMethod:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      ResourceId: !Ref ApiGatewayResource
+      HttpMethod: "GET"
+      AuthorizationType: "NONE"
+      Integration:
+        Type: "AWS"
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunction.Arn}/invocations"
+        IntegrationHttpMethod: "POST"
+        IntegrationResponses:
+          - StatusCode: "200"
+        PassthroughBehavior: WHEN_NO_MATCH
+      MethodResponses:
+        - StatusCode: "200"
+          ResponseModels:
+            application/json: Empty
+
+  ApiGatewayUsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    Properties:
+      ApiStages:
+        - ApiId: !Ref ApiGatewayRestApi
+          Stage: !Ref ApiGatewayStage
+      Quota:
+        Limit: 10000
+        Period: DAY
+      Throttle:
+        BurstLimit: 1000
+        RateLimit: 200
+      Description: "hello world api usage plan"
+      UsagePlanName: "HelloWorldUsagePlan"
+
+  LambdaFunction:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      FunctionName: !Ref lambdaFunctionName
+      Handler: "index.handler"
+      MemorySize: 128
+      Runtime: "nodejs16.x"
+      Code:
+        ZipFile: 'exports.handler = function(event, context, callback){ callback(null, "Hello World"); };'
+      Role: arn:aws:iam::872752637097:role/mng-test-lambda-ex
+      Timeout: 10
+
+  LambdaPermission:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      Action: "lambda:invokeFunction"
+      FunctionName: !Ref LambdaFunction
+      Principal: "apigateway.amazonaws.com"
