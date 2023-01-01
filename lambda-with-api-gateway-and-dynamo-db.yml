@@ -1,0 +1,216 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Resources:
+  PostsTableOnDynamoDB:
+    Type: "AWS::DynamoDB::Table"
+    Properties:
+      TableName: "Posts"
+      AttributeDefinitions:
+        - AttributeName: "post_id"
+          AttributeType: "S"
+      KeySchema:
+        - AttributeName: "post_id"
+          KeyType: "HASH"
+      ProvisionedThroughput:
+        ReadCapacityUnits: 50
+        WriteCapacityUnits: 5
+
+  FetchPostsLambdaFunction:
+    Type: "AWS::Lambda::Function"
+    DependsOn: PostsTableOnDynamoDB
+    Properties:
+      FunctionName: "fetch-posts"
+      Handler: "index.handler"
+      MemorySize: 128
+      Runtime: "nodejs16.x"
+      Code:
+        ZipFile: |
+          var AWS = require('aws-sdk');
+          var dynamo = new AWS.DynamoDB.DocumentClient();
+
+          const params = {
+            TableName : 'Posts',
+            region: 'ap-south-1',
+          }
+
+          async function getItem(){
+            try {
+              const data = await dynamo.scan(params).promise()
+              return data
+            } catch (err) {
+              return err
+            }
+          }
+
+          exports.handler = async (event, context) => {
+            try {
+              const data = await getItem()
+              const response = {
+                statusCode: 200,
+                body: JSON.stringify(data),
+              };
+              return response;
+            } catch(error) {
+              return {
+                statusCode: 500,
+                body: JSON.stringify(error)
+              }
+            }
+          };
+      Role: arn:aws:iam::872752637097:role/mng-dynamodb-lambda-full
+      Timeout: 10
+
+  FetchLambdaPermission:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      Action: "lambda:invokeFunction"
+      FunctionName: !Ref FetchPostsLambdaFunction
+      Principal: "apigateway.amazonaws.com"
+
+  PutPostsLambdaFunction:
+    Type: "AWS::Lambda::Function"
+    DependsOn: PostsTableOnDynamoDB
+    Properties:
+      FunctionName: "put-posts"
+      Handler: "index.handler"
+      MemorySize: 128
+      Runtime: "nodejs16.x"
+      Code:
+        ZipFile: |
+          var AWS = require('aws-sdk');
+          var dynamo = new AWS.DynamoDB.DocumentClient();
+
+          exports.handler = async (event, context) => {
+            const params = {
+              TableName : 'Posts',
+              region: 'ap-south-1',
+              Item: {
+                post_id: "1",
+                post_name: "First Post",
+                post_content: "This is the first post"
+              }
+            }
+            
+            try {
+              await dynamo.put(params).promise()
+              const response = {
+                statusCode: 200,
+                body: JSON.stringify("Item added successfully"),
+              };
+              return response;
+            } catch(error) {
+              return {
+                statusCode: 500,
+                body: JSON.stringify(error)
+              }
+            }
+          };
+      Role: arn:aws:iam::872752637097:role/mng-dynamodb-lambda-full
+      Timeout: 10
+
+  PutLambdaPermission:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      Action: "lambda:invokeFunction"
+      FunctionName: !Ref PutPostsLambdaFunction
+      Principal: "apigateway.amazonaws.com"
+
+  ApiGatewayRestApi:
+    Type: "AWS::ApiGateway::RestApi"
+    Properties:
+      Name: "Restful-api-for-posts"
+      Description: "A rest ful api for posts table on dynamo db"
+
+  ApiGatewayResource:
+    Type: "AWS::ApiGateway::Resource"
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      ParentId: !GetAtt ApiGatewayRestApi.RootResourceId
+      PathPart: "api"
+
+  ApiGatewayGETMethod:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      ResourceId: !Ref ApiGatewayResource
+      HttpMethod: "GET"
+      AuthorizationType: "NONE"
+      Integration:
+        Type: "AWS"
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FetchPostsLambdaFunction.Arn}/invocations"
+        IntegrationHttpMethod: "POST"
+        IntegrationResponses:
+          - StatusCode: "200"
+        PassthroughBehavior: WHEN_NO_MATCH
+      MethodResponses:
+        - StatusCode: "200"
+          ResponseModels:
+            application/json: Empty
+
+  ApiGatewayPOSTMethod:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      ResourceId: !Ref ApiGatewayResource
+      HttpMethod: "POST"
+      AuthorizationType: "NONE"
+      Integration:
+        Type: "AWS"
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PutPostsLambdaFunction.Arn}/invocations"
+        IntegrationHttpMethod: "POST"
+        IntegrationResponses:
+          - StatusCode: "200"
+        PassthroughBehavior: WHEN_NO_MATCH
+      MethodResponses:
+        - StatusCode: "200"
+          ResponseModels:
+            application/json: Empty
+
+  ApiGatewayDeployment:
+    Type: "AWS::ApiGateway::Deployment"
+    DependsOn:
+      - ApiGatewayGETMethod
+      - ApiGatewayPOSTMethod
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      Description: "Deployment of the api"
+
+  ApiGatewayStage:
+    Type: "AWS::ApiGateway::Stage"
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      DeploymentId: !Ref ApiGatewayDeployment
+      StageName: "dev"
+      Description: "development stage"
+
+  ApiGatewayUsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    Properties:
+      ApiStages:
+        - ApiId: !Ref ApiGatewayRestApi
+          Stage: !Ref ApiGatewayStage
+      Quota:
+        Limit: 10000
+        Period: DAY
+      Throttle:
+        BurstLimit: 1000
+        RateLimit: 200
+      Description: "Usage plan of api"
+      UsagePlanName: "posts_api_usage_plan"
+
+  ApiGatewayModel:
+    Type: "AWS::ApiGateway::Model"
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      Name: "PostsSchema"
+      Description: "Schema for Posts"
+      ContentType: "application/json"
+      Schema:
+        "$schema": "http://json-schema.org/draft-04/schema#"
+        title: PostsSchema
+        type: object
+        properties:
+          status:
+            type: string
+          message:
+            type: string
